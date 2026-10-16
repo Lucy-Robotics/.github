@@ -1,6 +1,6 @@
 # Lucy Robotics
 
-**Open Source Ecosystem for Humanoid Interaction and Control**
+**Open Source Ecosystem for Robots Interaction and Control**
 
 [![Discord](https://img.shields.io/discord/1272611839775084564?color=5865F2&label=Community&logo=discord&logoColor=white)](https://discord.gg/g4KNZ3eeBd)
 
