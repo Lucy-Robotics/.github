@@ -1,0 +1,13 @@
+name: Nightly lucy_ws E2E
+
+on:
+  schedule:
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lucy-ws:
+    uses: Lucy-Robotics/lucy_ws/.github/workflows/install-and-launch.yml@dev
