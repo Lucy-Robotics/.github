@@ -4,16 +4,53 @@ on:
   workflow_call:
     inputs:
       package_name:
-        description: ament package / src folder name
+        description: ament package / src folder name (job label, default codecov flag/name)
         required: true
         type: string
+      ros_distro:
+        description: ROS distro to build against (selects the osrf/ros image and setup.bash)
+        required: false
+        type: string
+        default: "jazzy"
+      gz_packages:
+        description: space-separated Gazebo apt packages to install (empty skips the Gazebo apt repo entirely)
+        required: false
+        type: string
+        default: "ros-jazzy-ros-gz ros-jazzy-gz-ros2-control"
+      extra_apt_packages:
+        description: extra space-separated apt packages to install alongside the base toolchain
+        required: false
+        type: string
+        default: ""
       rosdep_skip_keys:
         description: space-separated rosdep --skip-keys (optional)
         required: false
         type: string
         default: "lucy_control_supervisor"
+      repo_subpackages:
+        description: the repo root holds several colcon packages as subdirectories, instead of being one package itself
+        required: false
+        type: boolean
+        default: false
+      build_packages:
+        description: space-separated colcon packages to select for build/test (defaults to package_name alone)
+        required: false
+        type: string
+        default: ""
+      coverage_map:
+        description: |
+          one "pkg:relpath1,relpath2" entry per line, each relpath relative to src/<pkg>/.
+          Defaults to "<package_name>:launch,test" (plus coverage_extra_paths) when empty.
+        required: false
+        type: string
+        default: ""
       coverage_extra_paths:
-        description: extra dirs under the package to cover (e.g. scripts)
+        description: extra dirs under the package to cover (e.g. scripts); only used by the default coverage_map
+        required: false
+        type: string
+        default: ""
+      flags:
+        description: codecov flags value (defaults to package_name)
         required: false
         type: string
         default: ""
@@ -31,7 +68,7 @@ jobs:
     name: Build and test (${{ inputs.package_name }})
     runs-on: ubuntu-latest
     container:
-      image: osrf/ros:jazzy-desktop
+      image: osrf/ros:${{ inputs.ros_distro }}-desktop
     steps:
       - uses: actions/checkout@v4
 
@@ -41,8 +78,11 @@ jobs:
 
       - name: Install tooling
         run: |
-          sudo curl https://packages.osrfoundation.org/gazebo.gpg --output /usr/share/keyrings/pkgs-osrf-archive-keyring.gpg
-          echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/pkgs-osrf-archive-keyring.gpg] https://packages.osrfoundation.org/gazebo/ubuntu-stable $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/gazebo-stable.list > /dev/null
+          set -e
+          if [ -n "${{ inputs.gz_packages }}" ]; then
+            sudo curl https://packages.osrfoundation.org/gazebo.gpg --output /usr/share/keyrings/pkgs-osrf-archive-keyring.gpg
+            echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/pkgs-osrf-archive-keyring.gpg] https://packages.osrfoundation.org/gazebo/ubuntu-stable $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/gazebo-stable.list > /dev/null
+          fi
           apt-get update && apt-get install -y --no-install-recommends \
             python3-rosdep \
             python3-pytest \
@@ -51,8 +91,8 @@ jobs:
             build-essential \
             cmake \
             git \
-            ros-jazzy-ros-gz \
-            ros-jazzy-gz-ros2-control
+            ${{ inputs.gz_packages }} \
+            ${{ inputs.extra_apt_packages }}
           # Do not rm -rf /var/lib/apt/lists/* here; rosdep uses apt next and needs indexes.
           rosdep init || true
           rosdep update
@@ -61,7 +101,13 @@ jobs:
         run: |
           set -e
           mkdir -p "${COLCON_WS}/src"
-          cp -a "${GITHUB_WORKSPACE}" "${COLCON_WS}/src/${{ inputs.package_name }}"
+          if [ "${{ inputs.repo_subpackages }}" = "true" ]; then
+            for pkg in ${{ inputs.build_packages }}; do
+              cp -a "${GITHUB_WORKSPACE}/${pkg}" "${COLCON_WS}/src/${pkg}"
+            done
+          else
+            cp -a "${GITHUB_WORKSPACE}" "${COLCON_WS}/src/${{ inputs.package_name }}"
+          fi
 
       - name: rosdep install
         working-directory: ${{ env.COLCON_WS }}
@@ -69,7 +115,7 @@ jobs:
         run: |
           set -e
           apt-get update
-          source /opt/ros/jazzy/setup.bash
+          source /opt/ros/${{ inputs.ros_distro }}/setup.bash
           skip_keys=(${{ inputs.rosdep_skip_keys }})
           rosdep_args=(--from-paths src --ignore-src -r -y)
           if [ ${#skip_keys[@]} -gt 0 ]; then
@@ -84,22 +130,26 @@ jobs:
         working-directory: ${{ env.COLCON_WS }}
         shell: bash
         run: |
-          source /opt/ros/jazzy/setup.bash
+          source /opt/ros/${{ inputs.ros_distro }}/setup.bash
+          select_pkgs="${{ inputs.build_packages }}"
+          if [ -z "$select_pkgs" ]; then select_pkgs="${{ inputs.package_name }}"; fi
           colcon build --symlink-install \
-            --packages-select ${{ inputs.package_name }} \
+            --packages-select $select_pkgs \
             --cmake-args -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
 
       - name: colcon test
         working-directory: ${{ env.COLCON_WS }}
         shell: bash
         run: |
-          source /opt/ros/jazzy/setup.bash
+          source /opt/ros/${{ inputs.ros_distro }}/setup.bash
           source install/setup.bash
           if [ "${{ inputs.pytest_disable_plugin_autoload }}" = "true" ]; then
             export PYTEST_DISABLE_PLUGIN_AUTOLOAD=1
           fi
+          select_pkgs="${{ inputs.build_packages }}"
+          if [ -z "$select_pkgs" ]; then select_pkgs="${{ inputs.package_name }}"; fi
           colcon test \
-            --packages-select ${{ inputs.package_name }} \
+            --packages-select $select_pkgs \
             --event-handlers console_direct+ \
             --pytest-args "--tb=short -vv"
 
@@ -107,7 +157,7 @@ jobs:
         working-directory: ${{ env.COLCON_WS }}
         shell: bash
         run: |
-          source /opt/ros/jazzy/setup.bash
+          source /opt/ros/${{ inputs.ros_distro }}/setup.bash
           source install/setup.bash
           colcon test-result --verbose
 
@@ -117,39 +167,57 @@ jobs:
         if: success()
         run: |
           set -e
-          source /opt/ros/jazzy/setup.bash
+          source /opt/ros/${{ inputs.ros_distro }}/setup.bash
           source install/setup.bash
-          pkg="${{ inputs.package_name }}"
           if [ "${{ inputs.pytest_disable_plugin_autoload }}" = "true" ]; then
             export PYTEST_DISABLE_PLUGIN_AUTOLOAD=1
           fi
           mkdir -p build/coverage_reports
-          cov_args=(
-            --cov="src/${pkg}/launch"
-            --cov="src/${pkg}/test"
-          )
-          for extra in ${{ inputs.coverage_extra_paths }}; do
-            [ -n "$extra" ] || continue
-            cov_args+=(--cov="src/${pkg}/${extra}")
-          done
-          pytest_args=(src/"${pkg}"/test/)
-          if [ "${{ inputs.pytest_disable_plugin_autoload }}" = "true" ]; then
-            pytest_args+=(-p pytest_cov)
+
+          map="${{ inputs.coverage_map }}"
+          if [ -z "$map" ]; then
+            extra_cov=""
+            for extra in ${{ inputs.coverage_extra_paths }}; do
+              [ -n "$extra" ] || continue
+              extra_cov="${extra_cov},${extra}"
+            done
+            map="${{ inputs.package_name }}:launch,test${extra_cov}"
           fi
-          python3 -m pytest "${pytest_args[@]}" \
-            "${cov_args[@]}" \
-            --cov-report="xml:build/coverage_reports/${pkg}.xml" \
-            --cov-report="html:build/coverage_reports/html_${pkg}" \
-            --cov-report=term-missing \
-            --cov-branch
+
+          xmls=""
+          while IFS= read -r line; do
+            [ -n "$line" ] || continue
+            pkg="${line%%:*}"
+            rest="${line#*:}"
+            cov_args=()
+            IFS=',' read -ra relpaths <<< "$rest"
+            for rp in "${relpaths[@]}"; do
+              [ -n "$rp" ] || continue
+              cov_args+=(--cov="src/${pkg}/${rp}")
+            done
+            pytest_args=(src/"${pkg}"/test/)
+            if [ "${{ inputs.pytest_disable_plugin_autoload }}" = "true" ]; then
+              pytest_args+=(-p pytest_cov)
+            fi
+            python3 -m pytest "${pytest_args[@]}" \
+              "${cov_args[@]}" \
+              --cov-report="xml:build/coverage_reports/${pkg}.xml" \
+              --cov-report="html:build/coverage_reports/html_${pkg}" \
+              --cov-report=term-missing \
+              --cov-branch
+            xmls="${xmls:+$xmls,}${COLCON_WS}/build/coverage_reports/${pkg}.xml"
+          done <<< "$map"
+          echo "COVERAGE_XMLS=${xmls}" >> "${GITHUB_ENV}"
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4
         if: success()
+        timeout-minutes: 3
+        continue-on-error: true
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
-          files: ${{ env.COLCON_WS }}/build/coverage_reports/${{ inputs.package_name }}.xml
-          flags: ${{ inputs.package_name }}
+          files: ${{ env.COVERAGE_XMLS }}
+          flags: ${{ inputs.flags != '' && inputs.flags || inputs.package_name }}
           name: ${{ inputs.package_name }}
           fail_ci_if_error: false
 
