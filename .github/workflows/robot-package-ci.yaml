@@ -49,19 +49,11 @@ on:
         required: false
         type: string
         default: ""
-      flags:
-        description: codecov flags value (defaults to package_name)
-        required: false
-        type: string
-        default: ""
       pytest_disable_plugin_autoload:
         description: isolate pytest plugins (needed when --cov + conflicting plugins)
         required: false
         type: boolean
         default: true
-    secrets:
-      CODECOV_TOKEN:
-        required: false
 
 jobs:
   build-and-test:
@@ -184,7 +176,6 @@ jobs:
             map="${{ inputs.package_name }}:launch,test${extra_cov}"
           fi
 
-          xmls=""
           while IFS= read -r line; do
             [ -n "$line" ] || continue
             pkg="${line%%:*}"
@@ -205,21 +196,7 @@ jobs:
               --cov-report="html:build/coverage_reports/html_${pkg}" \
               --cov-report=term-missing \
               --cov-branch
-            xmls="${xmls:+$xmls,}${COLCON_WS}/build/coverage_reports/${pkg}.xml"
           done <<< "$map"
-          echo "COVERAGE_XMLS=${xmls}" >> "${GITHUB_ENV}"
-
-      - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v4
-        if: success()
-        timeout-minutes: 3
-        continue-on-error: true
-        with:
-          token: ${{ secrets.CODECOV_TOKEN }}
-          files: ${{ env.COVERAGE_XMLS }}
-          flags: ${{ inputs.flags != '' && inputs.flags || inputs.package_name }}
-          name: ${{ inputs.package_name }}
-          fail_ci_if_error: false
 
       - name: Upload coverage artifacts (XML + HTML)
         uses: actions/upload-artifact@v4

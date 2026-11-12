@@ -1,0 +1,49 @@
+name: Codecov upload
+
+on:
+  workflow_call:
+    inputs:
+      artifact_name:
+        description: name of the artifact holding the coverage XML files (as produced by robot-package-ci.yaml)
+        required: true
+        type: string
+      flags:
+        description: codecov flags value
+        required: true
+        type: string
+      name:
+        description: codecov name value
+        required: true
+        type: string
+    secrets:
+      CODECOV_TOKEN:
+        required: false
+
+jobs:
+  upload:
+    name: Upload coverage to Codecov (${{ inputs.name }})
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download coverage artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.artifact_name }}
+          path: coverage_reports
+
+      - name: Find coverage XML files
+        id: xmls
+        run: |
+          set -e
+          xmls=$(find coverage_reports -maxdepth 1 -name '*.xml' | paste -sd ',' -)
+          echo "files=${xmls}" >> "${GITHUB_OUTPUT}"
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        timeout-minutes: 3
+        continue-on-error: true
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: ${{ steps.xmls.outputs.files }}
+          flags: ${{ inputs.flags }}
+          name: ${{ inputs.name }}
+          fail_ci_if_error: false
