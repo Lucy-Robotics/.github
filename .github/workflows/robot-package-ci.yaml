@@ -151,7 +151,7 @@ jobs:
           colcon test \
             --packages-select $select_pkgs \
             --event-handlers console_direct+ \
-            --pytest-args "--tb=short -vv"
+            --pytest-args --tb=short -vv
 
       - name: colcon test-result
         working-directory: ${{ env.COLCON_WS }}
